@@ -1,5 +1,6 @@
-// exam_forms.jsx — 정기시험 자료 생성기 v1.0
+// exam_forms.jsx — 정기시험 자료 생성기 v1.1
 import { useState, useMemo, useCallback, useRef } from "react";
+import * as XLSX from "xlsx";
 import {
   Upload, FileText, Users, Clock, MapPin, Printer, AlertCircle,
   CheckCircle, Settings, ChevronDown, ChevronUp, Grid3x3,
@@ -192,9 +193,23 @@ function colIdx(headers, ...keywords) {
 function readFile(file) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
-    r.onload = (e) => resolve(e.target.result);
-    r.onerror = reject;
-    r.readAsText(file, "utf-8");
+    const isExcel = /\.(xlsx|xls|ods)$/i.test(file.name);
+    if (isExcel) {
+      r.onload = (e) => {
+        try {
+          const wb = XLSX.read(e.target.result, { type: "array" });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const csv = XLSX.utils.sheet_to_csv(ws, { FS: ",", blankrows: false });
+          resolve(csv);
+        } catch (err) { reject(err); }
+      };
+      r.onerror = reject;
+      r.readAsArrayBuffer(file);
+    } else {
+      r.onload = (e) => resolve(e.target.result);
+      r.onerror = reject;
+      r.readAsText(file, "utf-8");
+    }
   });
 }
 
@@ -224,7 +239,7 @@ function UploadZone({ label, hint, fileName, onChange, example }) {
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,.tsv,.txt"
+          accept=".csv,.tsv,.txt,.xlsx,.xls,.ods"
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => handleFile(e.target.files[0])}
           style={{ display: "none" }}
@@ -235,7 +250,7 @@ function UploadZone({ label, hint, fileName, onChange, example }) {
         <p>
           {fileName
             ? <><strong>{fileName}</strong> 업로드 완료</>
-            : <><strong>클릭하거나 파일을 끌어다 놓으세요</strong><br />CSV / TSV 형식</>
+            : <><strong>클릭하거나 파일을 끌어다 놓으세요</strong><br />엑셀(.xlsx) · CSV · TSV 모두 지원</>
           }
         </p>
       </div>
@@ -264,7 +279,8 @@ function UploadZone({ label, hint, fileName, onChange, example }) {
           <strong>{label} 형식</strong>
           <pre>{example}</pre>
           <div style={{ marginTop: 6 }}>
-            <code>쉼표(,)</code> 또는 <code>탭(엑셀 복붙)</code> 구분 모두 지원 · UTF-8 인코딩
+            <code>.xlsx</code> / <code>.xls</code> 엑셀 파일 직접 업로드 가능 (첫 번째 시트 사용)<br />
+            또는 <code>.csv</code> · 엑셀에서 복사해 붙여넣기한 <code>TSV</code> 지원
           </div>
         </div>
       )}
