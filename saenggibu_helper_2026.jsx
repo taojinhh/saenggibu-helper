@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   ClipboardList, Users, Compass, UserCheck, Sparkles, Copy, Check,
   Trash2, Download, AlertTriangle, FileText, Plus, X, Save, ChevronDown,
-  Settings, Eye, EyeOff
+  Settings, Eye, EyeOff, BookOpen, Upload, Loader2
 } from "lucide-react";
 
 /* =========================================================================
@@ -58,6 +58,17 @@ const AREAS = {
       { key: "role", label: "역할·태도", ph: "예) 리더 역할, 배려하는 태도" },
       { key: "behavior", label: "관찰한 행동", ph: "예) 친구 의견을 끝까지 경청함" },
       { key: "result", label: "결과·성장", ph: "예) 모둠 분위기가 밝아짐" },
+    ],
+  },
+  subject: {
+    id: "subject", label: "교과세특", icon: BookOpen,
+    accent: "#1a7f5a",
+    limit: 500,
+    fields: [
+      { key: "subjectName", label: "교과목", ph: "예) 통합과학, 문학, 수학Ⅱ" },
+      { key: "unit", label: "단원·주제", ph: "예) 생태계와 환경, 이차함수의 활용" },
+      { key: "behavior", label: "관찰한 행동·태도", ph: "예) 스스로 탐구 주제를 설정하고 실험 설계까지 수행함" },
+      { key: "result", label: "결과·성장", ph: "예) 개념 이해가 심화되어 추가 탐구로 이어짐" },
     ],
   },
 };
@@ -213,6 +224,13 @@ function buildDraft(areaId, f) {
     const c = j(f.result) ? `이를 통해 ${j(f.result)}.` : "";
     return [a, b, c].filter(Boolean).join(" ");
   }
+  if (areaId === "subject") {
+    const sub = j(f.subjectName) ? `${j(f.subjectName)} 수업에서 ` : "";
+    const unit = j(f.unit) ? `${j(f.unit)} 학습 시 ` : "";
+    const a = j(f.behavior) ? `${sub}${unit}${j(f.behavior)}.` : `${sub}${unit}수업에 적극적으로 참여함.`;
+    const b = j(f.result) ? `이를 통해 ${j(f.result)}.` : "";
+    return [a, b].filter(Boolean).join(" ");
+  }
   // 자율 / 동아리 공통
   const lead = j(f.role) ? `${j(f.situation) || "활동"}에서 ${j(f.role)}을 맡아` : `${j(f.situation) || "활동"}에 참여하여`;
   const a = j(f.behavior) ? `${lead} ${j(f.behavior)}.` : `${lead} 적극적으로 활동함.`;
@@ -256,7 +274,7 @@ async function callAI(config, systemPrompt, userPrompt) {
       },
       body: JSON.stringify({
         model,
-        max_tokens: 1000,
+        max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
       }),
@@ -272,7 +290,7 @@ async function callAI(config, systemPrompt, userPrompt) {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({
         model,
-        max_tokens: 1000,
+        max_tokens: 2048,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -293,10 +311,95 @@ async function callAI(config, systemPrompt, userPrompt) {
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: [{ parts: [{ text: userPrompt }] }],
-          generationConfig: { maxOutputTokens: 1000 },
+          generationConfig: { maxOutputTokens: 4096 },
         }),
       }
     );
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || "Gemini API 오류");
+    // 중단 이유가 MAX_TOKENS이면 경고 포함해서 반환
+    const finishReason = data.candidates?.[0]?.finishReason;
+    const text = (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+    if (finishReason === "MAX_TOKENS" && text) {
+      return text + "…(문장이 잘렸습니다. 다시 생성해 보세요.)";
+    }
+    return text;
+  }
+
+  throw new Error("알 수 없는 프로바이더");
+}
+
+// ── 평가계획 파일 읽기 ────────────────────────────────────────────────────
+function readUploadedFile(file) {
+  return new Promise((resolve, reject) => {
+    const isTxt = file.type === "text/plain" || file.name.toLowerCase().endsWith(".txt");
+    const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+    if (!isTxt && !isPdf) {
+      reject(new Error("PDF 또는 TXT 파일만 지원해요. HWP는 PDF로 변환 후 업로드해 주세요."));
+      return;
+    }
+    const reader = new FileReader();
+    if (isTxt) {
+      reader.onload = (e) => resolve({ name: file.name, text: e.target.result, base64: null, mimeType: "text/plain" });
+      reader.readAsText(file, "utf-8");
+    } else {
+      reader.onload = (e) => {
+        const base64 = e.target.result.split(",")[1];
+        resolve({ name: file.name, text: null, base64, mimeType: "application/pdf" });
+      };
+      reader.readAsDataURL(file);
+    }
+    reader.onerror = () => reject(new Error("파일을 읽을 수 없어요."));
+  });
+}
+
+async function analyzeEvalFile(config, fileData, subjectName) {
+  const { provider, model, apiKey } = config;
+  const sysPrompt = `당신은 교사의 교과 평가계획 문서를 분석하는 도우미입니다.
+평가계획서에서 다음 항목을 추출하여 간결하게 정리해 주세요:
+1. 평가 영역·기준 (성취기준 코드 및 내용)
+2. 주요 평가 방법 (수행평가, 지필, 프로젝트 등)
+3. 핵심 역량·태도 (어떤 역량을 평가하는지)
+4. 세특 작성 시 반영할 핵심 키워드
+
+결과는 번호 목록으로만 출력하고, 분석 설명이나 머리말 없이 핵심만 정리해 주세요.`;
+  const userPrompt = `${subjectName ? `[교과목: ${subjectName}]\n` : ""}위 평가계획 문서를 분석해 주세요.`;
+
+  if (provider === "claude") {
+    const contentParts = fileData.base64
+      ? [{ type: "document", source: { type: "base64", media_type: "application/pdf", data: fileData.base64 } }, { type: "text", text: userPrompt }]
+      : [{ type: "text", text: `[평가계획 내용]\n${fileData.text}\n\n${userPrompt}` }];
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({ model, max_tokens: 1024, system: sysPrompt, messages: [{ role: "user", content: contentParts }] }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || "Claude API 오류");
+    return (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+  }
+
+  if (provider === "openai") {
+    const textContent = fileData.text || "(PDF 파일 — 내용 직접 분석 불가. 텍스트 파일로 업로드해 주세요.)";
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, max_tokens: 1024, messages: [{ role: "system", content: sysPrompt }, { role: "user", content: `[평가계획 내용]\n${textContent}\n\n${userPrompt}` }] }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || "OpenAI API 오류");
+    return (data.choices?.[0]?.message?.content || "").trim();
+  }
+
+  if (provider === "gemini") {
+    const parts = fileData.base64
+      ? [{ inline_data: { mime_type: "application/pdf", data: fileData.base64 } }, { text: userPrompt }]
+      : [{ text: `[평가계획 내용]\n${fileData.text}\n\n${userPrompt}` }];
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ system_instruction: { parts: [{ text: sysPrompt }] }, contents: [{ parts }], generationConfig: { maxOutputTokens: 1024 } }),
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || "Gemini API 오류");
     return (data.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
@@ -322,6 +425,11 @@ export default function App() {
     catch { return DEFAULT_AI_CONFIG; }
   });
   const [showKey, setShowKey] = useState(false);
+  const [evalFile, setEvalFile] = useState(null);
+  const [fileAnalysis, setFileAnalysis] = useState("");
+  const [analyzing, setAnalyzing] = useState(false);
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const fileInputRef = useRef(null);
 
   const area = AREAS[tab];
   const f = fields[tab] || {};
@@ -343,6 +451,35 @@ export default function App() {
   const overLimit = chars > area.limit;
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2200); };
+
+  async function handleFileUpload(file) {
+    if (!file) return;
+    try {
+      const fileData = await readUploadedFile(file);
+      setEvalFile(fileData);
+      setFileAnalysis("");
+      setShowAnalysis(false);
+      flash(`"${fileData.name}" 파일이 업로드됐어요. '분석하기'를 눌러 평가 기준을 추출해 보세요.`);
+    } catch (e) {
+      flash(e.message);
+    }
+  }
+
+  async function analyzeFile() {
+    if (!evalFile) { flash("파일을 먼저 업로드해 주세요."); return; }
+    if (!aiConfig.apiKey.trim()) { setShowSettings(true); flash("AI 서비스 API 키를 먼저 설정해 주세요."); return; }
+    setAnalyzing(true);
+    try {
+      const result = await analyzeEvalFile(aiConfig, evalFile, f.subjectName || "");
+      setFileAnalysis(result);
+      setShowAnalysis(true);
+      flash("평가계획 분석 완료! 아래 결과를 참고해 관찰 메모를 채워 주세요.");
+    } catch (e) {
+      flash(`분석 오류: ${e.message}`);
+    } finally {
+      setAnalyzing(false);
+    }
+  }
 
   function saveAiConfig(cfg) {
     setAiConfig(cfg);
@@ -374,7 +511,18 @@ export default function App() {
         : area.fields
             .map((fd) => `- ${fd.label}: ${(f[fd.key] || "").trim() || "(없음)"}`)
             .join("\n");
-      const sys = `당신은 한국 고등학교 학교생활기록부 작성을 돕는 교사 보조입니다.
+      const isSubject = tab === "subject";
+      const sys = isSubject
+        ? `당신은 한국 고등학교 학교생활기록부 교과학습발달상황 세부능력 및 특기사항(세특) 작성을 돕는 교사 보조입니다.
+
+규칙(2026 학생부 기재요령):
+- 명사형 어미('~함.', '~임.')로 종결. '~라고 생각함/느낌', '~알게 됨', '~다짐함'은 사용 금지.
+- 교사가 수업 중 직접 관찰한 학생의 학습 과정, 역량, 태도 중심으로 서술.
+- 교과 성취기준·핵심 역량과 연계되도록 구체적으로 작성.
+- 상호명/기관명/대학명, 공인어학·모의고사 성적, 교외 수상, 자격증명 등 기재 불가.
+- 2~4문장, 학생 개별 특성이 드러나게, 단순 나열 지양. 500자 이내.
+- 완성된 세특 문장만 출력. 따옴표·머리말·설명 없이.`
+        : `당신은 한국 고등학교 학교생활기록부 작성을 돕는 교사 보조입니다.
 교사가 직접 관찰·평가한 메모를 '${area.label}' 특기사항 문장으로 다듬습니다.
 
 규칙(2026 학생부 기재요령):
@@ -384,7 +532,12 @@ export default function App() {
 - 생성형 AI, 특정 앱·플랫폼명은 일반 명사로(예: 생성형 인공지능, 온라인 협업 플랫폼).
 - 학생 개별 특성이 드러나게, 단순 나열을 지양하고 2~4문장으로 자연스럽게 작성.
 - 결과 문장만 출력. 따옴표·머리말·설명 없이 완성된 특기사항 문장만.`;
-      const usr = `학생 메모:\n${memo}\n\n위 메모를 '${area.label}' 특기사항 문장으로 다듬어 주세요.`;
+      const evalContext = isSubject && fileAnalysis
+        ? `\n\n[평가계획 분석 결과 — 세특 작성 시 반영]\n${fileAnalysis}`
+        : "";
+      const usr = isSubject
+        ? `교사 관찰 메모:\n${memo}${evalContext}\n\n위 내용을 바탕으로 교과세특 문장을 작성해 주세요.`
+        : `학생 메모:\n${memo}\n\n위 메모를 '${area.label}' 특기사항 문장으로 다듬어 주세요.`;
 
       const out = await callAI(aiConfig, sys, usr);
       setDraft(out || fallback);
@@ -563,6 +716,57 @@ export default function App() {
             <input style={S.input} value={student} placeholder="예) 12번 홍길동"
               onChange={(e) => setStudent(e.target.value)} />
           </div>
+
+          {tab === "subject" && (
+            <div style={S.fileSection}>
+              <div style={S.fileSectionLabel}>
+                <Upload size={13} /> 평가계획 파일 업로드 <span style={S.fileOptional}>(선택)</span>
+              </div>
+              <div
+                style={{ ...S.dropzone, ...(evalFile ? S.dropzoneActive : {}) }}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => { e.preventDefault(); handleFileUpload(e.dataTransfer.files[0]); }}
+              >
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.txt"
+                  style={{ display: "none" }}
+                  onChange={(e) => handleFileUpload(e.target.files[0])}
+                />
+                {evalFile ? (
+                  <div style={S.fileInfo}>
+                    <FileText size={14} />
+                    <span style={S.fileName}>{evalFile.name}</span>
+                    <button style={S.fileRemove} onClick={(e) => { e.stopPropagation(); setEvalFile(null); setFileAnalysis(""); setShowAnalysis(false); }}>
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <span style={S.dropzoneHint}>PDF 또는 TXT 파일을 끌어다 놓거나 클릭해서 선택</span>
+                )}
+              </div>
+              {evalFile && (
+                <button
+                  style={{ ...S.analyzeBtn, background: analyzing ? "#ccc" : area.accent }}
+                  onClick={analyzeFile}
+                  disabled={analyzing}
+                >
+                  {analyzing ? <><Loader2 size={13} className="spin" /> 분석 중…</> : <><Sparkles size={13} /> 평가 기준 분석하기</>}
+                </button>
+              )}
+              {fileAnalysis && (
+                <div style={S.analysisBox}>
+                  <button style={S.analysisToggle} onClick={() => setShowAnalysis((v) => !v)}>
+                    <Check size={12} style={{ color: "#1a7f5a" }} /> 분석 완료 — 세특 생성 시 자동 반영됨
+                    <span style={{ marginLeft: "auto", fontSize: 11, color: "#aaa" }}>{showAnalysis ? "▲ 접기" : "▼ 펼치기"}</span>
+                  </button>
+                  {showAnalysis && <pre style={S.analysisPre}>{fileAnalysis}</pre>}
+                </div>
+              )}
+            </div>
+          )}
 
           {tab === "behavior" ? (
             <div style={S.chipGroups}>
@@ -766,6 +970,20 @@ const S = {
   settingsBtn: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600, color: "#444", background: "#f3f3f3", border: "1px solid #e0e0e0", borderRadius: 999, padding: "7px 13px", cursor: "pointer", fontFamily: "inherit" },
   providerDot: { width: 7, height: 7, borderRadius: 99, background: "#27ae60", display: "inline-block" },
   eyeBtn: { position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", border: "none", background: "transparent", color: "#aaa", cursor: "pointer", display: "grid", placeItems: "center", padding: 0 },
+  // 교과세특 파일 업로드
+  fileSection: { marginBottom: 14, display: "flex", flexDirection: "column", gap: 8 },
+  fileSectionLabel: { display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, fontWeight: 700, color: "#555" },
+  fileOptional: { fontWeight: 400, color: "#aaa" },
+  dropzone: { border: "1.5px dashed #d0d0d0", borderRadius: 10, padding: "13px 14px", cursor: "pointer", background: "#fafafa", transition: "all .15s", minHeight: 44, display: "flex", alignItems: "center" },
+  dropzoneActive: { borderColor: "#1a7f5a", background: "#f0faf6" },
+  dropzoneHint: { fontSize: 12, color: "#bbb", width: "100%", textAlign: "center" },
+  fileInfo: { display: "flex", alignItems: "center", gap: 7, width: "100%", fontSize: 12.5, color: "#333", fontWeight: 500 },
+  fileName: { flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  fileRemove: { border: "none", background: "transparent", color: "#bbb", cursor: "pointer", display: "grid", placeItems: "center", flexShrink: 0 },
+  analyzeBtn: { display: "flex", alignItems: "center", justifyContent: "center", gap: 6, color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" },
+  analysisBox: { border: "1px solid #c8ecd5", borderRadius: 9, background: "#f0faf6", overflow: "hidden" },
+  analysisToggle: { display: "flex", alignItems: "center", gap: 6, width: "100%", padding: "9px 12px", fontSize: 12, fontWeight: 600, color: "#1a7f5a", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", textAlign: "left" },
+  analysisPre: { margin: 0, padding: "0 12px 12px", fontSize: 11.5, lineHeight: 1.7, color: "#333", whiteSpace: "pre-wrap", wordBreak: "break-word" },
 };
 
 const CSS = `
