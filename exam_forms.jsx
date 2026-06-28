@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import {
   Upload, FileText, Users, Clock, MapPin, Printer, AlertCircle,
   CheckCircle, Settings, ChevronDown, ChevronUp, Grid3x3,
-  BookOpen, List, LayoutGrid, X, Info
+  BookOpen, List, LayoutGrid, X, Info, Download
 } from "lucide-react";
 
 /* ═══════════════════════════════════════════════════════════
@@ -214,9 +214,93 @@ function readFile(file) {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   Template Download
+═══════════════════════════════════════════════════════════ */
+const TEMPLATES = {
+  class: {
+    filename: "학급_학생_명렬_양식.xlsx",
+    sheets: [{
+      name: "학급명렬",
+      data: [
+        ["번호", "이름"],
+        [1, "홍길동"],
+        [2, "김민준"],
+        [3, "이서연"],
+        [4, "박지우"],
+        [5, "최수아"],
+      ]
+    }]
+  },
+  elective: {
+    filename: "선택과목_학생_명렬_양식.xlsx",
+    sheets: [{
+      name: "선택과목명렬",
+      data: [
+        ["과목", "학반", "번호", "이름"],
+        ["물리학Ⅱ", "1-1", 1, "홍길동"],
+        ["물리학Ⅱ", "1-1", 15, "이민준"],
+        ["물리학Ⅱ", "1-2", 3, "김지유"],
+        ["화학Ⅱ", "1-1", 3, "이서연"],
+        ["화학Ⅱ", "1-1", 22, "박준서"],
+        ["생명과학Ⅱ", "1-1", 8, "최수아"],
+      ]
+    }]
+  },
+  schedule: {
+    filename: "시험시간표_양식.xlsx",
+    sheets: [{
+      name: "시험시간표",
+      data: [
+        ["날짜", "교시", "과목"],
+        ["6/30", 1, "국어"],
+        ["6/30", 2, "수학"],
+        ["6/30", 3, "물리학Ⅱ"],
+        ["6/30", 3, "화학Ⅱ"],
+        ["6/30", 3, "생명과학Ⅱ"],
+        ["7/1", 1, "영어"],
+        ["7/1", 2, "한국사"],
+        ["7/1", 3, "사회·문화"],
+      ]
+    }]
+  },
+  room: {
+    filename: "시간별_장소_양식.xlsx",
+    sheets: [{
+      name: "시간별장소",
+      data: [
+        ["날짜", "교시", "과목", "장소"],
+        ["6/30", 1, "국어", "본교실"],
+        ["6/30", 2, "수학", "본교실"],
+        ["6/30", 3, "물리학Ⅱ", "301호"],
+        ["6/30", 3, "화학Ⅱ", "302호"],
+        ["6/30", 3, "생명과학Ⅱ", "303호"],
+        ["7/1", 1, "영어", "본교실"],
+        ["7/1", 2, "한국사", "본교실"],
+        ["7/1", 3, "사회·문화", "본교실"],
+      ]
+    }]
+  },
+};
+
+function downloadTemplate(key) {
+  const tmpl = TEMPLATES[key];
+  if (!tmpl) return;
+  const wb = XLSX.utils.book_new();
+  tmpl.sheets.forEach(({ name, data }) => {
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    // 헤더 열 너비 자동 설정
+    ws["!cols"] = data[0].map((_, ci) => ({
+      wch: Math.max(...data.map((r) => String(r[ci] ?? "").length)) + 4
+    }));
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  });
+  XLSX.writeFile(wb, tmpl.filename);
+}
+
+/* ═══════════════════════════════════════════════════════════
    Sub-components
 ═══════════════════════════════════════════════════════════ */
-function UploadZone({ label, hint, fileName, onChange, example }) {
+function UploadZone({ label, hint, fileName, onChange, example, templateKey }) {
   const [drag, setDrag] = useState(false);
   const [open, setOpen] = useState(false);
   const inputRef = useRef();
@@ -254,7 +338,17 @@ function UploadZone({ label, hint, fileName, onChange, example }) {
           }
         </p>
       </div>
-      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {templateKey && (
+          <button
+            className="ef-period-btn"
+            onClick={() => downloadTemplate(templateKey)}
+            style={{ color: "#2563eb", borderColor: "#93c5fd", fontWeight: 600 }}
+          >
+            <Download size={12} style={{ display: "inline", marginRight: 4 }} />
+            양식 다운로드
+          </button>
+        )}
         <button
           className="ef-period-btn"
           onClick={() => setOpen((v) => !v)}
@@ -623,6 +717,7 @@ export default function ExamForms() {
                 fileName={classText ? "업로드됨" : ""}
                 onChange={(text) => setClassText(text)}
                 example={`번호,이름\n1,홍길동\n2,김민준\n3,이서연\n...`}
+                templateKey="class"
               />
             </CollapseCard>
 
@@ -633,6 +728,7 @@ export default function ExamForms() {
                 fileName={electText ? "업로드됨" : ""}
                 onChange={(text) => setElectText(text)}
                 example={`과목,학반,번호,이름\n물리학Ⅱ,1-1,1,홍길동\n물리학Ⅱ,1-2,5,김민준\n화학Ⅱ,1-1,3,이서연\n\n※ 학반 열이 없으면 설정의 학반명 사용`}
+                templateKey="elective"
               />
             </CollapseCard>
 
@@ -643,6 +739,7 @@ export default function ExamForms() {
                 fileName={schedText ? "업로드됨" : ""}
                 onChange={(text) => setSchedText(text)}
                 example={`날짜,교시,과목\n6/30,1,국어\n6/30,2,수학\n6/30,3,물리학Ⅱ\n6/30,3,화학Ⅱ\n7/1,1,영어\n\n※ 같은 날짜+교시에 여러 과목 = 선택과목 교시`}
+                templateKey="schedule"
               />
             </CollapseCard>
 
@@ -653,6 +750,7 @@ export default function ExamForms() {
                 fileName={roomText ? "업로드됨" : ""}
                 onChange={(text) => setRoomText(text)}
                 example={`날짜,교시,과목,장소\n6/30,1,국어,본교실\n6/30,2,수학,본교실\n6/30,3,물리학Ⅱ,301호\n6/30,3,화학Ⅱ,302호\n7/1,1,영어,본교실\n\n※ 장소가 '본교실'이면 전원 응시, 나머지는 선택과목 시험실`}
+                templateKey="room"
               />
             </CollapseCard>
 
