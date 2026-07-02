@@ -2,6 +2,7 @@ import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import SaenggibuApp from "../saenggibu_helper_2026.jsx";
 import ExamFormsApp from "../exam_forms.jsx";
+import ExamSupervisorApp from "../exam_supervisor.jsx";
 
 const NAV_STYLE = `
   .app-nav {
@@ -19,11 +20,14 @@ const NAV_STYLE = `
 `;
 
 function Root() {
-  const [app, setApp] = useState("exam");
+  const [app, setApp] = useState("supervisor");
   return (
     <>
       <style>{NAV_STYLE}</style>
       <nav className="app-nav">
+        <button className={`app-nav-btn ${app === "supervisor" ? "active" : ""}`} onClick={() => setApp("supervisor")}>
+          🗓️ 감독 배정 시스템
+        </button>
         <button className={`app-nav-btn ${app === "exam" ? "active" : ""}`} onClick={() => setApp("exam")}>
           📋 정기시험 자료 생성기
         </button>
@@ -31,7 +35,7 @@ function Root() {
           ✏️ 생기부 작성 도우미
         </button>
       </nav>
-      {app === "exam" ? <ExamFormsApp /> : <SaenggibuApp />}
+      {app === "supervisor" ? <ExamSupervisorApp /> : app === "exam" ? <ExamFormsApp /> : <SaenggibuApp />}
     </>
   );
 }

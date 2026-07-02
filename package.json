@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run build && gh-pages -d dist",
+    "deploy:exam-forms": "vite build --config vite.exam.config.js && node -e \"require('fs').copyFileSync('dist/index-exam.html','dist/index.html')\" && gh-pages -d dist -r https://github.com/taojinhh/exam-forms.git -b gh-pages"
   },
   "dependencies": {
     "lucide-react": "^0.469.0",
